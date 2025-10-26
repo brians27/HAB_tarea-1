@@ -1,230 +1,166 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-
 """
-analisis_funcional.py
+analisis_funcional.py — Functional enrichment analysis of genes
+Author: [Your Name]
+Date: [Date]
 
-Script completo per analisi funzionale dei geni:
-- Conversione simboli → Entrez/Ensembl
-- Arricchimento funzionale Enrichr
-- Interazioni STRING
-- Analisi GOATOOLS opzionale
+Description:
+  This script performs a functional enrichment analysis of genes
+  listed in a comma-separated file "genes_input.txt" (do not modify it).
+  It fetches functional annotations from MyGene, performs enrichment
+  using Enrichr API, and generates bar plots for top terms.
+  Results are saved in the "results" folder, overwriting previous outputs.
 """
 
+import argparse
 import os
 import sys
 import requests
 import pandas as pd
-from typing import List, Optional
+import mygene
+import matplotlib.pyplot as plt
+import seaborn as sns
 
-# -----------------------------
-# MyGene per conversione ID
-# -----------------------------
-try:
-    import mygene
-except ImportError:
-    print("Installa 'mygene' con pip install mygene")
-    sys.exit(1)
+# -------------------- Utilities --------------------
+def read_gene_file(path: str) -> list[str]:
+    """Read comma-separated genes from a file and return a clean list."""
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"File not found: {path}")
+    with open(path, "r") as f:
+        content = f.read()
+    genes = [g.strip().upper() for g in content.split(",") if g.strip()]
+    return genes
 
-# -----------------------------
-# gseapy per Enrichr
-# -----------------------------
-try:
-    from gseapy import enrichr
-except ImportError:
-    print("Installa 'gseapy' con pip install gseapy")
-    sys.exit(1)
 
-# -----------------------------
-# GOATOOLS opzionale
-# -----------------------------
-try:
-    from goatools.obo_parser import GODag
-    from goatools.go_enrichment_ns import GOEnrichmentStudy
-    from goatools.associations import read_ncbi_gene2go
-    GOATOOLS_AVAILABLE = True
-except ImportError:
-    GOATOOLS_AVAILABLE = False
+def ensure_results_dir(path: str) -> None:
+    os.makedirs(path, exist_ok=True)
 
-# -----------------------------
-# Conversione simboli → Entrez/Ensembl
-# -----------------------------
-class IDConverter:
-    def __init__(self):
-        self.mg = mygene.MyGeneInfo()
 
-    def convert(self, symbols: List[str]) -> pd.DataFrame:
-        res = self.mg.querymany(symbols, scopes='symbol', fields='entrezgene,ensembl.gene,name', species='human')
-        rows = []
-        for r in res:
-            rows.append({
-                'query': r.get('query'),
-                'symbol': r.get('symbol'),
-                'entrez': r.get('entrezgene'),
-                'ensembl': r.get('ensembl', {}).get('gene') if isinstance(r.get('ensembl'), dict) else None,
-                'name': r.get('name'),
-                'found': not r.get('notfound', False)
-            })
-        return pd.DataFrame(rows)
+# -------------------- Functional Annotations --------------------
+def fetch_annotations(genes: list[str]) -> pd.DataFrame:
+    """Retrieve gene annotations from MyGene."""
+    MITO_GENES = ["ND1", "ND2", "ND3", "ND4", "ND4L", "ND5", "ND6",
+                  "CO1", "CO2", "CO3", "CYB", "ATP6", "ATP8"]
+    corrected_genes = ["MT-" + g if g in MITO_GENES else g for g in genes]
 
-# -----------------------------
-# STRING API
-# -----------------------------
-class STRINGdb:
-    STRING_API = "https://version-11-5.string-db.org/api/json"
+    if corrected_genes != genes:
+        print("Detected mitochondrial genes. Adjusted query names:")
+        for orig, corr in zip(genes, corrected_genes):
+            print(f"  {orig} → {corr}")
 
-    def __init__(self):
-        self.session = requests.Session()
-
-    def get_interactions(self, identifier: str, species: int = 9606, required_score: int = 700) -> List[dict]:
-        url = f"{self.STRING_API}/network"
-        params = {'identifier': identifier, 'species': species, 'required_score': required_score}
-        try:
-            r = self.session.get(url, params=params, timeout=15)
-            if r.status_code != 200:
-                return []
-            return r.json()
-        except Exception:
-            return []
-
-# -----------------------------
-# Enrichr
-# -----------------------------
-def run_enrichr(genes: List[str], outdir: str) -> pd.DataFrame:
-    libs = [
-        'GO_Biological_Process_2023',
-        'GO_Cellular_Component_2023',
-        'GO_Molecular_Function_2023',
-        'KEGG_2021_Human',
-        'Reactome_2022'
-    ]
-    all_res = []
-    for lib in libs:
-        try:
-            enr = enrichr(
-                gene_list=genes,
-                gene_sets=lib,
-                organism='Human',
-                description='enrichr_analysis',
-                outdir=outdir,
-                cutoff=0.05,
-                no_plot=True
-            )
-            df = enr.results
-            if df is not None and not df.empty:
-                df['library'] = lib
-                all_res.append(df)
-        except Exception as e:
-            print(f'Enrichr fallito per {lib}: {e}')
-
-    if all_res:
-        df_all = pd.concat(all_res, ignore_index=True)
-    else:
-        # crea file vuoto se non ci sono risultati
-        df_all = pd.DataFrame(columns=[
-            'Term','Overlap','P-value','Adjusted P-value','Old P-value','Old Adjusted',
-            'Z-score','Combined Score','Genes','library'
-        ])
-    df_all.to_csv(os.path.join(outdir, 'enrichr_combined.tsv'), sep='\t', index=False)
-    print(f"Arricchimento Enrichr salvato in: {os.path.join(outdir, 'enrichr_combined.tsv')}")
-    return df_all
-
-# -----------------------------
-# GOATOOLS opzionale
-# -----------------------------
-def run_goatools(study_genes: List[str], gene2go_path: str, obo_path: str, outdir: str) -> Optional[pd.DataFrame]:
-    if not GOATOOLS_AVAILABLE:
-        print('GOATOOLS non disponibile. Saltando analisi GO locale.')
-        return None
-
-    godag = GODag(obo_path)
-    associations = read_ncbi_gene2go(gene2go_path, taxids=[9606])
-    background = set(associations.keys())
-
-    if any(not g.isdigit() for g in study_genes):
-        print('GOATOOLS richiede Entrez Gene IDs per study_genes.')
-        return None
-
-    study_set = set(int(g) for g in study_genes)
-
-    goeaobj = GOEnrichmentStudy(
-        list(background),
-        associations,
-        godag,
-        propagate_counts=True,
-        alpha=0.05,
-        methods=['fdr_bh']
+    mg = mygene.MyGeneInfo()
+    annotations = mg.querymany(
+        corrected_genes,
+        scopes='symbol',
+        fields=['name', 'go.BP.term', 'go.MF.term', 'go.CC.term', 'pathway.kegg.name'],
+        species='human'
     )
-
-    goea_results = goeaobj.run_study(list(study_set))
-
-    rows = []
-    for r in goea_results:
-        rows.append({
-            'GO': r.GO,
-            'name': r.name,
-            'p_uncorrected': r.p_uncorrected,
-            'p_fdr_bh': r.p_fdr_bh,
-            'study_count': r.study_count,
-            'study_items': ';'.join(map(str, r.study_items))
-        })
-
-    df = pd.DataFrame(rows)
-    df.to_csv(os.path.join(outdir, 'goatools_enrichment.tsv'), sep='\t', index=False)
-    print(f"Analisi GOATOOLS salvata in: {os.path.join(outdir, 'goatools_enrichment.tsv')}")
+    df = pd.DataFrame(annotations)
     return df
 
-# -----------------------------
-# Main
-# -----------------------------
+
+# -------------------- Enrichment with Enrichr --------------------
+def enrichr_analysis(genes: list[str], libraries: list[str]) -> dict:
+    """Submit genes to Enrichr API and fetch top enriched terms."""
+    add_list_url = "https://maayanlab.cloud/Enrichr/addList"
+    enrich_url = "https://maayanlab.cloud/Enrichr/enrich"
+
+    gene_str = "\n".join(genes)
+    payload = {'list': (None, gene_str), 'description': (None, 'Functional analysis')}
+    response = requests.post(add_list_url, files=payload)
+    if response.status_code != 200:
+        raise RuntimeError("Error submitting gene list to Enrichr.")
+
+    user_list_id = response.json()['userListId']
+    enrichment_results = {}
+
+    for lib in libraries:
+        params = {'userListId': user_list_id, 'backgroundType': lib}
+        enrich_response = requests.get(enrich_url, params=params)
+        if enrich_response.status_code != 200:
+            print(f"Error retrieving enrichment results for {lib}")
+            continue
+        results = enrich_response.json()
+        if lib not in results:
+            continue
+        enrichment_results[lib] = results[lib][:5]  # Keep top 5 terms
+    return enrichment_results
+
+
+# -------------------- Plotting --------------------
+def plot_enrichment(enrichment_results: dict, out_dir: str) -> None:
+    """Create barplots for enrichment results (overwriting old ones)."""
+    sns.set(style="whitegrid")
+
+    for lib, terms_data in enrichment_results.items():
+        if not terms_data:
+            continue
+
+        terms = [entry[1] for entry in terms_data]
+        scores = [entry[4] for entry in terms_data]
+
+        plt.figure(figsize=(8, 5))
+        sns.barplot(x=scores, y=terms, palette="viridis")
+        plt.xlabel("Combined Score")
+        plt.ylabel("Term")
+        plt.title(f"Top 5 Enriched Terms: {lib}")
+        plt.tight_layout()
+
+        # Fixed filename → overwrite each run
+        plot_filename = f"top5_{lib.replace(' ', '_')}.png"
+        plot_path = os.path.join(out_dir, plot_filename)
+        plt.savefig(plot_path, dpi=150)
+        plt.close()
+
+        print(f"Saved barplot for {lib} to '{plot_path}'")
+
+
+# -------------------- CLI --------------------
+def parse_args():
+    parser = argparse.ArgumentParser(description="Functional enrichment analysis CLI.")
+    parser.add_argument("--input", type=str, default="../data/genes_input.txt",
+                        help="Input file with genes (comma-separated).")
+    parser.add_argument("--results", type=str, default="../results",
+                        help="Folder to save results and plots.")
+    return parser.parse_args()
+
+
+# -------------------- Main --------------------
 def main():
-    import argparse
+    args = parse_args()
+    ensure_results_dir(args.results)
 
-    parser = argparse.ArgumentParser(description="Analisi funzionale dei geni")
-    parser.add_argument("--input", required=True, help="File di geni (uno per linea)")
-    parser.add_argument("--out", required=True, help="Cartella di output")
-    parser.add_argument("--gene2go", required=False, help="File gene2go (per GOATOOLS)")
-    parser.add_argument("--obo", required=False, help="File go-basic.obo (per GOATOOLS)")
-    args = parser.parse_args()
+    # Step 1: Load genes
+    genes = read_gene_file(args.input)
+    print("Genes loaded from file:")
+    print(genes)
+    print("=" * 60)
 
-    os.makedirs(args.out, exist_ok=True)
+    # Step 2: Fetch annotations
+    print("Fetching gene annotations from MyGene...")
+    annotations_df = fetch_annotations(genes)
+    annotations_csv_path = os.path.join(args.results, "gene_annotations.csv")
+    annotations_df.to_csv(annotations_csv_path, index=False)
+    print(f"Functional annotations saved to '{annotations_csv_path}'")
+    print("=" * 60)
 
-    # Legge geni
-    with open(args.input) as f:
-        genes = [line.strip() for line in f if line.strip()]
+    # Step 3: Enrichment analysis
+    print("Performing enrichment analysis using Enrichr...\n")
+    libraries = ['KEGG_2021_Human', 'GO_Biological_Process_2023']
+    enrichment_results = enrichr_analysis(genes, libraries)
 
-    # Conversione simboli
-    print("Converting symbols to Entrez/Ensembl...")
-    converter = IDConverter()
-    df_ids = converter.convert(genes)
-    df_ids.to_csv(os.path.join(args.out, 'id_mapping.tsv'), sep='\t', index=False)
-    print(f"ID mapping salvato in: {os.path.join(args.out, 'id_mapping.tsv')}")
+    print("Top enrichment results:")
+    for lib, results in enrichment_results.items():
+        print(f"\n--- {lib} ---")
+        for entry in results:
+            print(f"{entry[1]} (p={entry[2]:.3e}, combined score={entry[4]:.2f})")
+    print("=" * 60)
 
-    # STRING interazioni
-    stringdb = STRINGdb()
-    all_interactions = []
-    print("Consultando interazioni STRING...")
-    for gene in genes:
-        interactions = stringdb.get_interactions(gene)
-        for inter in interactions:
-            inter['gene'] = gene
-        all_interactions.extend(interactions)
-    # Salva interazioni in file
-    if all_interactions:
-        pd.DataFrame(all_interactions).to_csv(os.path.join(args.out, 'string_interactions.tsv'), sep='\t', index=False)
-        print(f"Interazioni STRING salvate in: {os.path.join(args.out, 'string_interactions.tsv')}")
+    # Step 4: Plot barplots (overwrites existing files)
+    plot_enrichment(enrichment_results, args.results)
+    print("Analysis completed successfully.")
 
-    # Enrichr
-    print("Eseguendo arricchimento Enrichr...")
-    run_enrichr(genes, args.out)
-
-    # GOATOOLS opzionale
-    if args.gene2go and args.obo:
-        print("Eseguendo analisi GOATOOLS locale...")
-        entrez_genes = [str(g) for g in df_ids['entrez'] if g is not None]
-        run_goatools(entrez_genes, args.gene2go, args.obo, args.out)
-
-    print("Analisi completa! Risultati in:", args.out)
 
 if __name__ == "__main__":
     main()

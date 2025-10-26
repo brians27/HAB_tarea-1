@@ -1,2 +1,7 @@
+mygene
+requests
+pandas
+matplotlib
+seaborn
 
 
