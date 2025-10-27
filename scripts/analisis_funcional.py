@@ -2,8 +2,8 @@
 # -*- coding: utf-8 -*-
 """
 analisis_funcional.py — Functional enrichment analysis of genes
-Author: Brian Stano
-Date: 26/10/2025
+Author: [Brian Stano]
+Date: [26/10/2025]
 
 Description:
   This script performs a functional enrichment analysis of genes
@@ -11,6 +11,12 @@ Description:
   It fetches functional annotations from MyGene, performs enrichment
   using Enrichr API, and generates bar plots for top terms.
   Results are saved in the "results" folder.
+
+Methods and databases:
+  - MyGene: Provides gene-level annotations, including GO terms and KEGG pathways.
+  - Enrichr API: Performs Over-Representation Analysis (ORA) to identify enriched pathways
+    and GO Biological Process terms.
+  - Matplotlib & Seaborn: Used to visualize top enriched terms as horizontal bar plots.
 """
 
 import argparse
@@ -24,7 +30,10 @@ import seaborn as sns
 
 # -------------------- Utilities --------------------
 def read_gene_file(path: str) -> list[str]:
-    """Read comma-separated genes from a file and return a clean list."""
+    """
+    Read comma-separated genes from a file and return a clean list.
+    Converts all gene symbols to uppercase and removes extra spaces.
+    """
     if not os.path.exists(path):
         raise FileNotFoundError(f"File not found: {path}")
     with open(path, "r") as f:
@@ -34,12 +43,21 @@ def read_gene_file(path: str) -> list[str]:
 
 
 def ensure_results_dir(path: str) -> None:
+    """Create results directory if it does not exist."""
     os.makedirs(path, exist_ok=True)
 
 
 # -------------------- Functional Annotations --------------------
 def fetch_annotations(genes: list[str]) -> pd.DataFrame:
-    """Retrieve gene annotations from MyGene."""
+    """
+    Retrieve gene annotations from MyGene.
+    
+    Notes:
+      - Some genes are mitochondrial (e.g., ND1, CO1, ATP6) and require
+        the prefix 'MT-' to match the official nomenclature.
+      - Fetches GO terms for Biological Process, Molecular Function,
+        Cellular Component, and KEGG pathway names.
+    """
     MITO_GENES = ["ND1", "ND2", "ND3", "ND4", "ND4L", "ND5", "ND6",
                   "CO1", "CO2", "CO3", "CYB", "ATP6", "ATP8"]
     corrected_genes = ["MT-" + g if g in MITO_GENES else g for g in genes]
@@ -62,7 +80,16 @@ def fetch_annotations(genes: list[str]) -> pd.DataFrame:
 
 # -------------------- Enrichment with Enrichr --------------------
 def enrichr_analysis(genes: list[str], libraries: list[str]) -> dict:
-    """Submit genes to Enrichr API and fetch top enriched terms."""
+    """
+    Submit genes to Enrichr API and fetch top enriched terms.
+
+    Notes:
+      - Enrichr performs Over-Representation Analysis (ORA) comparing
+        input genes to a background database (KEGG, GO BP, etc.).
+      - Only the top 5 terms for each library are retrieved for simplicity.
+      - 'Combined Score' reflects both the p-value and the deviation
+        from expected gene counts, higher is more significant.
+    """
     add_list_url = "https://maayanlab.cloud/Enrichr/addList"
     enrich_url = "https://maayanlab.cloud/Enrichr/enrich"
 
@@ -84,13 +111,21 @@ def enrichr_analysis(genes: list[str], libraries: list[str]) -> dict:
         results = enrich_response.json()
         if lib not in results:
             continue
-        enrichment_results[lib] = results[lib][:5]  # Keep top 5 terms
+        # Keep only top 5 enriched terms
+        enrichment_results[lib] = results[lib][:5]
     return enrichment_results
 
 
 # -------------------- Plotting --------------------
 def plot_enrichment(enrichment_results: dict, out_dir: str) -> None:
-    """Create barplots for enrichment results (overwriting old ones)."""
+    """
+    Create barplots for enrichment results (overwriting old ones).
+
+    Notes:
+      - Bars represent the 'Combined Score' from Enrichr.
+      - Horizontal bar plots make it easy to read term names.
+      - Existing plots with the same name are overwritten each run.
+    """
     sns.set(style="whitegrid")
 
     for lib, terms_data in enrichment_results.items():
