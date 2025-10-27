@@ -2,15 +2,15 @@
 # -*- coding: utf-8 -*-
 """
 analisis_funcional.py — Functional enrichment analysis of genes
-Author: [Your Name]
-Date: [Date]
+Author: Brian Stano
+Date: 26/10/2025
 
 Description:
   This script performs a functional enrichment analysis of genes
-  listed in a comma-separated file "genes_input.txt" (do not modify it).
+  listed in a comma-separated file "genes_input.txt".
   It fetches functional annotations from MyGene, performs enrichment
   using Enrichr API, and generates bar plots for top terms.
-  Results are saved in the "results" folder, overwriting previous outputs.
+  Results are saved in the "results" folder.
 """
 
 import argparse
