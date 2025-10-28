@@ -31,7 +31,13 @@ import seaborn as sns
 
 # -------------------- Utilities --------------------
 def read_gene_file(path: str) -> list[str]:
-    """Read comma-separated genes from a file and return a clean list."""
+    """
+    Read comma-separated genes from a file and return a clean list.
+
+    Notes:
+      - Converts all gene symbols to uppercase.
+      - Removes extra spaces and empty entries.
+    """
     if not os.path.exists(path):
         raise FileNotFoundError(f"File not found: {path}")
     with open(path, "r") as f:
@@ -48,8 +54,14 @@ def ensure_results_dir(path: str) -> None:
 # -------------------- Functional Annotations --------------------
 def fetch_annotations(genes: list[str]) -> pd.DataFrame:
     """
-    Retrieve and clean gene annotations from MyGene.info for better readability.
-    Converts GO and KEGG information into user-friendly, semicolon-separated strings.
+    Retrieve gene annotations from MyGene and format them for readability.
+
+    Notes:
+      - Some genes are mitochondrial (e.g., ND1, CO1, ATP6) and require
+        the prefix 'MT-' to match official nomenclature.
+      - Fetches GO terms for Biological Process, Molecular Function,
+        Cellular Component, and KEGG pathway names.
+      - Returns a user-friendly CSV with semicolon-separated terms.
     """
     MITO_GENES = ["ND1", "ND2", "ND3", "ND4", "ND4L", "ND5", "ND6",
                   "CO1", "CO2", "CO3", "CYB", "ATP6", "ATP8"]
@@ -69,9 +81,8 @@ def fetch_annotations(genes: list[str]) -> pd.DataFrame:
     )
     df_raw = pd.DataFrame(annotations)
 
-    # --- Clean and simplify the data ---
     def extract_terms(field):
-        """Extract terms from MyGene nested dicts and join with '; '."""
+        """Extract terms from nested dicts/lists and join them with '; '."""
         if isinstance(field, list):
             return "; ".join(sorted(set([d.get('term') or d.get('name') for d in field if isinstance(d, dict) and (d.get('term') or d.get('name'))])))
         elif isinstance(field, dict):
@@ -79,7 +90,6 @@ def fetch_annotations(genes: list[str]) -> pd.DataFrame:
         else:
             return ""
 
-    # Prepare cleaned columns
     df_clean = pd.DataFrame({
         "Gene": df_raw["query"],
         "Official_Name": df_raw.get("name", ""),
@@ -94,7 +104,16 @@ def fetch_annotations(genes: list[str]) -> pd.DataFrame:
 
 # -------------------- Enrichment with Enrichr --------------------
 def enrichr_analysis(genes: list[str], libraries: list[str]) -> dict:
-    """Submit genes to Enrichr API and fetch top enriched terms."""
+    """
+    Submit genes to Enrichr API and fetch top enriched terms.
+
+    Notes:
+      - Enrichr performs Over-Representation Analysis (ORA) comparing
+        input genes to a background database (KEGG, GO BP, etc.).
+      - Only the top 5 terms for each library are retrieved for simplicity.
+      - 'Combined Score' reflects both the p-value and the deviation
+        from expected gene counts, higher is more significant.
+    """
     add_list_url = "https://maayanlab.cloud/Enrichr/addList"
     enrich_url = "https://maayanlab.cloud/Enrichr/enrich"
 
@@ -116,13 +135,20 @@ def enrichr_analysis(genes: list[str], libraries: list[str]) -> dict:
         results = enrich_response.json()
         if lib not in results:
             continue
-        enrichment_results[lib] = results[lib][:5]  # top 5
+        enrichment_results[lib] = results[lib][:5]
     return enrichment_results
 
 
 # -------------------- Plotting --------------------
 def plot_enrichment(enrichment_results: dict, out_dir: str) -> None:
-    """Create barplots for enrichment results (overwriting old ones)."""
+    """
+    Create barplots for enrichment results (overwriting old ones).
+
+    Notes:
+      - Bars represent the 'Combined Score' from Enrichr.
+      - Horizontal bar plots make it easy to read term names.
+      - Existing plots with the same name are overwritten each run.
+    """
     sns.set(style="whitegrid")
 
     for lib, terms_data in enrichment_results.items():
